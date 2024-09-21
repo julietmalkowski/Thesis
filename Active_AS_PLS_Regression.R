@@ -1,3 +1,5 @@
+#Code used for first draft of thesis- utilizing the p-values of the data
+
 #PLS Regression on Active AS Community Analysis
 library(phyloseq)
 library(vegan)
