@@ -1,5 +1,4 @@
-#PLS Regression on Active AS Community Analysis
-
+#PLS Regression using Influent Microbial Community to Predict Active AS Microbial Community 
 #utilizing abundance values of the active AS community to predict TSS Removal and COD Removal
 #(since it was most promising from last code iteration)
 
@@ -35,86 +34,94 @@ otus = as.data.frame(otus)
 #move rownames to column
 colnames(otus)[1] = "OTU"
 #remove rows where OTU column does not contain AS-1 and AS-2
-otus = otus[grepl("AS-1|AS-2", otus$OTU),]
+as = otus[grepl("AS-1|AS-2", otus$OTU),]
 #remove V1
-otus = otus[,c(-1,-2)]
-#metadata
-metadata = sample_data(wwtp)
-metadata = as.data.frame(metadata)
+as = as[,c(-1,-2)]
 
-#add columns from metadata to otus as a predictive measure
-metadata <- metadata[match(rownames(otus), rownames(metadata)), ]
-#move rownames to column 1
-metadata = cbind(rownames(metadata), metadata)
-#make column 1 date
-colnames(metadata)[1] = "date"
-#remove last 3 columns
-metadata = metadata[,c(-44,-45,-46)]
-#keep only characters 6-16
-metadata$date = substr(metadata$date, 6, 16)
-metadata[,-1] = sapply(metadata[,-1], as.numeric)
-#remove date column
-metadata = metadata[,-1]
-metadata = aggregate(. ~ substr(rownames(metadata), 6, 16), metadata, mean)
-#change column 1 to rownames
-rownames(metadata) = metadata[,1]
-colnames(metadata)[1] = "date"
-metadata = metadata[order(metadata$date),]
+#remove rows where OTU column does not contain AS-1 and AS-2
+inf = otus[grepl("Inf", otus$OTU),]
+#remove V1
+inf = inf[,c(-1,-2)]
 
-metadata = metadata[,-1]
-
-#turn rownames into a column
-otus = cbind(rownames(otus), otus)
-
-colnames(otus)[1] = "date"
+#Edit AS
+colnames(as)[1] = "date"
 #remove first 3 characters from date
-otus$date = substr(otus$date, 6, nchar(otus$date))
+as$date = substr(as$date, 6, nchar(as$date))
 #turn date into date format
-otus$date = as.Date(otus$date, format = "%m/%d/%Y")
+as$date = as.Date(as$date, format = "%m/%d/%Y")
 #turn all other columns except date into floats
-otus[,-1] = sapply(otus[,-1], as.numeric)
+as[,-1] = sapply(as[,-1], as.numeric)
 #remove date column
-otus = otus[,-1]
+as = as[,-1]
 #aggregate based on last 10 characters in rownames
-otus = aggregate(. ~ substr(rownames(otus), 6, 16), otus, mean)
+as = aggregate(. ~ substr(rownames(as), 6, 16), as, mean)
 #move column 1 to rownames
-rownames(otus) = otus[,1]
+rownames(as) = as[,1]
 #change column 1 to date
-colnames(otus)[1] = "date"
+colnames(as)[1] = "date"
+as$date = as.Date(as$date, format = "%m/%d/%Y")
 #organize by date
-otus = otus[order(otus$date),]
+as = as[order(as$date),]
 #remove date column
-otus = otus[,-1]
+as = as[,-1]
 
+#move rownames to first column
+inf = cbind(rownames(inf), inf)
+#call column 1 date
+colnames(inf)[1] = "date"
+#remove first 3 characters from date
+inf$date = substr(inf$date, 5, nchar(inf$date))
+#make date rownames
+rownames(inf) = inf$date
+inf$date = as.Date(inf$date, format = "%m/%d/%Y")
+inf = inf[order(inf$date),]
+inf = inf[,-1]
+
+#keep only matching rownames from inf and as
+#remove last row from as
+as = as[-nrow(as),]
+#remove row 4
+as = as[c(-4,-11),]
+
+#average every 2 rows in inf
+as <- as %>%
+  group_by(group = (row_number() - 1) %/% 2) %>%
+  summarise(across(where(is.numeric), mean))
+#remove group column
+as = as[,-1]
+#keep columns with title "Zotu2", "Zotu3", "Zotu10", "Zotu5", "Zotu289"
+as = subset(as,select = c("Zotu2", "Zotu3", "Zotu10", "Zotu5", "Zotu289"))
 
 #Trying PLS only using relative abundances of the microbial community
 #find size of otus- with samples as width and zOTUs as length
-samples= dim(otus)[1]
-zotus = dim(otus)[2]
+samples = dim(inf)[1]
+zotus = dim(inf)[2]
+
+#turn as and inf dataframes into numeric matrices
+as <- data.frame(lapply(as, function(x) as.numeric(as.character(x))))
 
 #subset otus into two sets- training and testing with trained_samples number used for training
-train_otus = as.matrix(otus[1:round(samples*.8, 0),])
-test_otus = as.matrix(otus[(round(samples*.8, 0)+1):samples,])
+train_otus = as.matrix(inf[1:round(samples*.8, 0),])
+test_otus = as.matrix(inf[(round(samples*.8, 0)+1):samples,])
 
-## TSS Load Removed (column 7)
+## Impact of Influent Microbial community on core AS community
 #keep the rownames in metadata that are the same in train_otus
-train_metadata = as.matrix(metadata[1:round(samples*.8, 0),])
-test_metadata = as.matrix(metadata[(round(samples*.8, 0)+1):samples,])
+train_metadata = as.matrix(as[1:round(samples*.8, 0),])
+test_metadata = as.matrix(as[(round(samples*.8, 0)+1):samples,])
+
+train_metadata = as.matrix(apply(train_metadata, 2, as.numeric))
+test_metadata = as.matrix(apply(test_metadata, 2, as.numeric))
+train_otus = as.matrix(apply(train_otus, 2, as.numeric))
+test_otus = as.matrix(apply(test_otus, 2, as.numeric))
+
 
 ## Plotting PLS Model
 # ncomp is number of components
-pls_model_tss <- pls(train_otus, train_metadata[,7], 10, x.test = test_otus, y.test = test_metadata[,7])
+pls_model_tss <- pls(train_otus, train_metadata, 10, x.test = test_otus, y.test = test_metadata)
 summary(pls_model_tss)
 #plot the PLS model
-cod_model = plot(pls_model_tss)
-plotPredictions(pls_model_tss$res$cal, ncomp = 5, show.stat = TRUE) 
-cod_vip = plotVIPScores(pls_model_tss)
+tss_model = plot(pls_model_tss)
+plotPredictions(pls_model_tss$res$cal, ncomp = 1, show.stat = TRUE) 
+tss_vip = plotVIPScores(pls_model_tss)
 
 
-## COD Load Removed (column 11)
-pls_model_cod <- pls(train_otus, train_metadata[,11], 10, x.test = test_otus, y.test = test_metadata[,11])
-summary(pls_model_cod)
-#plot the PLS model
-cod_model = plot(pls_model_cod)
-plotPredictions(pls_model_cod$res$cal, ncomp = 5, show.stat = TRUE) 
-cod_vip = plotVIPScores(pls_model_cod)
