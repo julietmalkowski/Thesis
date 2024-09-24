@@ -1,5 +1,4 @@
-#PLS Regression using SRT time of Active AS Microbial Community to predict COD/TSS Removal over time
-
+#PLS Regression on Active AS Community Analysis
 library(phyloseq)
 library(vegan)
 library(picante)
@@ -15,104 +14,67 @@ library(reshape2)
 library(plotly)
 library(microbiome)
 library(mdatools)
-
 #For reproducibility
 set.seed(123)
 
-#load excel file
-wwtp1 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet1')
-wwtp2 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet2')
-wwtp3 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet3')
-wwtp4 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet4')
-wwtp5 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet5')
-
-wwtp = rbind(wwtp1, wwtp2, wwtp3, wwtp4, wwtp5)
-#move column names to row 1
-colnames(wwtp) = wwtp[1,]
-#remove column 1
-wwtp = wwtp[,-1]
-#change column names to 'week', 'OTU', 'SRT_AS', 'SRT_AD'
-colnames(wwtp) = c("week", "OTU", "SRT_AS", "SRT_AD")
-#delete last column
-wwtp = wwtp[,-ncol(wwtp)]
-#make week column rownames and OTUs columns with values being SRT_AS
-pivot_table <- wwtp %>%
-  pivot_wider(names_from = OTU, values_from = SRT_AS)
-#replace na with 0
-pivot_table[is.na(pivot_table)] = 0
-#remove columns with all 0s
-pivot_table = pivot_table[, colSums(pivot_table != 0) > 0]
-#remove columns if they contain values in less than 75% of all rows
-pivot_table = pivot_table[, colMeans(pivot_table != 0) > 0.75]
-#turn week column numeric
-pivot_table$week = as.numeric(pivot_table$week)
-#turn into matrix
-pivot_table = as.matrix(pivot_table)
-#make rownames the week column
-rownames(pivot_table) = pivot_table[,1]
-
-metadata = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/AS_metadata.xlsx")
-#remove column 1
-metadata = metadata[,c(-1,-14,-16,-18)]
-
-input_nutrients = metadata[,c(1,2,3,4,5,6,8,10,12,13,14,15,19)]
-input_nutrients = input_nutrients %>% group_by(Week) %>% summarise_all(mean)
-#add input nutrients to pivot_table based on week
-pivot_table = as.data.frame(pivot_table)
-input_nutrients = as.data.frame(input_nutrients)
-#change Week to week
-input_nutrients = input_nutrients %>% rename(week = Week)
-pivot_table = merge(pivot_table, input_nutrients, by = "week")
-#make week rownames in pivot_table
-rownames(pivot_table) = pivot_table[,1]
-
-metadata = metadata[,-c(1,2,3,4,5,6,8,10,12,13,15,14)]
-#groupby week and average metadata
-metadata = metadata %>% group_by(Week) %>% summarise_all(mean)
-#make a matrix
-metadata = as.matrix(metadata)
-#make week rownames in metadata
-rownames(metadata) = metadata[,1]
-
-#keep only the rows in pivot_table that are in metadata based on week column
+#load phyloseq object
+load(file = "/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/filtered_as_wwtp_p-values.RData")
+#metadata
+metadata = sample_data(wwtp)
 metadata = as.data.frame(metadata)
-pivot_table = as.data.frame(pivot_table)
-metadata = metadata[rownames(pivot_table),]
+#make Week column rownames in metadata
+metadata= metadata %>% group_by(Week) %>% summarise_all(mean)
+rownames(metadata) = metadata$Week
 
-#remove na from metadata
+
+
+srts = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/filtered_AS_data_over35_weeks_otu.xlsx")
+#remove column 1
+srts = srts[,-1]
+colnames(srts) = c("Week", "SRT_AS","OTU")
+srts <- srts %>%
+  pivot_wider(names_from = OTU, values_from = SRT_AS)
+
+metadata = as.data.frame(metadata)
+srts = as.data.frame(srts)
+rownames(srts) = srts$Week
+
+metadata = metadata[rownames(srts),]
+
+#remove metadata rows with na
 metadata = metadata[complete.cases(metadata),]
-#delete column 1
-metadata = metadata[,-1]
-pivot_table = pivot_table[,-1]
-#as matrix
-metadata = as.matrix(metadata)
-pivot_table = as.matrix(pivot_table)
+#put a zero instead of NA
+srts[is.na(srts)] = 0
+
+
+#remove column 1
+srts = srts[,-1]
+srts = srts[rownames(metadata),]
+
+input_nutrients = metadata[,c(2,3,4,5,6,7,9,11,13,15,17,19)]
+metadata= metadata[,-c(2,3,4,5,6,7,9,11,13,14,15,16,17,18,19,23)]
+#merge srts and input nutrients based on rownames
+#srts = cbind(srts, input_nutrients)
+
+
 #Trying PLS only using relative abundances of the microbial community
 #find size of otus- with samples as width and zOTUs as length
-samples = dim(pivot_table)[1]
-zotus = dim(pivot_table)[2]
+samples= dim(srts)[1]
+zotus = dim(srts)[2]
 
 #subset otus into two sets- training and testing with trained_samples number used for training
-train_otus = as.matrix(pivot_table[1:round(samples*.8, 0),])
-test_otus = as.matrix(pivot_table[(round(samples*.8, 0)+1):samples,])
+train_otus = as.matrix(srts[1:round(samples*.8, 0),])
+test_otus = as.matrix(srts[(round(samples*.8, 0)+1):samples,])
 
-## Impact of Influent Microbial community on core AS community
 #keep the rownames in metadata that are the same in train_otus
-train_metadata = as.matrix(metadata[1:round(samples*.8, 0),])
-test_metadata = as.matrix(metadata[(round(samples*.8, 0)+1):samples,])
+train_metadata = as.matrix(metadata[rownames(train_otus),])
+test_metadata = as.matrix(metadata[rownames(test_otus),])
 
-train_metadata = as.matrix(apply(train_metadata, 2, as.numeric))
-test_metadata = as.matrix(apply(test_metadata, 2, as.numeric))
-train_otus = as.matrix(apply(train_otus, 2, as.numeric))
-test_otus = as.matrix(apply(test_otus, 2, as.numeric))
-
-
-## Plotting PLS Model
-# ncomp is number of components
-pls_model_tss <- pls(train_otus, train_metadata[,3], 10, x.test = test_otus, y.test = test_metadata[,2])
-summary(pls_model_tss)
+#gas produced
+gas_produced_model <- pls(train_otus, train_metadata[,4], x.test = test_otus, y.test = test_metadata[,4])
+summary(gas_produced_model)
 #plot the PLS model
-tss_model = plot(pls_model_tss)
-plotPredictions(pls_model_tss$res$cal, ncomp = 1, show.stat = TRUE) 
-tss_vip = plotVIPScores(pls_model_tss)
+tss_model = plot(gas_produced_model)
+plotPredictions(gas_produced_model$res$cal, ncomp = 1, show.stat = TRUE) 
+tss_vip = plotVIPScores(gas_produced_model)
 
