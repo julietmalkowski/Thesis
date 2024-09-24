@@ -1,6 +1,4 @@
-#PLS Regression using Influent Microbial Community to Predict Active AS Microbial Community 
-#utilizing abundance values of the active AS community to predict TSS Removal and COD Removal
-#(since it was most promising from last code iteration)
+#PLS Regression using SRT time of Active AS Microbial Community to predict COD/TSS Removal over time
 
 library(phyloseq)
 library(vegan)
@@ -21,93 +19,87 @@ library(mdatools)
 #For reproducibility
 set.seed(123)
 
-#load phyloseq object
-load(file = "/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/wwtp_raw.RData")
+#load excel file
+wwtp1 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet1')
+wwtp2 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet2')
+wwtp3 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet3')
+wwtp4 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet4')
+wwtp5 = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/genus_table.xlsx", sheet = 'Sheet5')
 
-otus = otu_table(wwtp)
-otus = as.data.frame(otus)
-otus = t(otus)
-otus = as.matrix(otus)
-#move rownames to first column
-otus = cbind(rownames(otus), otus)
-otus = as.data.frame(otus)
-#move rownames to column
-colnames(otus)[1] = "OTU"
-#remove rows where OTU column does not contain AS-1 and AS-2
-as = otus[grepl("AS-1|AS-2", otus$OTU),]
-#remove V1
-as = as[,c(-1,-2)]
+wwtp = rbind(wwtp1, wwtp2, wwtp3, wwtp4, wwtp5)
+#move column names to row 1
+colnames(wwtp) = wwtp[1,]
+#remove column 1
+wwtp = wwtp[,-1]
+#change column names to 'week', 'OTU', 'SRT_AS', 'SRT_AD'
+colnames(wwtp) = c("week", "OTU", "SRT_AS", "SRT_AD")
+#delete last column
+wwtp = wwtp[,-ncol(wwtp)]
+#make week column rownames and OTUs columns with values being SRT_AS
+pivot_table <- wwtp %>%
+  pivot_wider(names_from = OTU, values_from = SRT_AS)
+#replace na with 0
+pivot_table[is.na(pivot_table)] = 0
+#remove columns with all 0s
+pivot_table = pivot_table[, colSums(pivot_table != 0) > 0]
+#remove columns if they contain values in less than 75% of all rows
+pivot_table = pivot_table[, colMeans(pivot_table != 0) > 0.75]
+#turn week column numeric
+pivot_table$week = as.numeric(pivot_table$week)
+#turn into matrix
+pivot_table = as.matrix(pivot_table)
+#make rownames the week column
+rownames(pivot_table) = pivot_table[,1]
 
-#remove rows where OTU column does not contain AS-1 and AS-2
-inf = otus[grepl("Inf", otus$OTU),]
-#remove V1
-inf = inf[,c(-1,-2)]
+metadata = read_excel("/Users/julietmalkowski/Desktop/Thesis/Final_Codes/Final_Codes_R/AS_metadata.xlsx")
+#remove column 1
+metadata = metadata[,c(-1,-14,-16,-18)]
 
-#Edit AS
-colnames(as)[1] = "date"
-#remove first 3 characters from date
-as$date = substr(as$date, 6, nchar(as$date))
-#turn date into date format
-as$date = as.Date(as$date, format = "%m/%d/%Y")
-#turn all other columns except date into floats
-as[,-1] = sapply(as[,-1], as.numeric)
-#remove date column
-as = as[,-1]
-#aggregate based on last 10 characters in rownames
-as = aggregate(. ~ substr(rownames(as), 6, 16), as, mean)
-#move column 1 to rownames
-rownames(as) = as[,1]
-#change column 1 to date
-colnames(as)[1] = "date"
-as$date = as.Date(as$date, format = "%m/%d/%Y")
-#organize by date
-as = as[order(as$date),]
-#remove date column
-as = as[,-1]
+input_nutrients = metadata[,c(1,2,3,4,5,6,8,10,12,13,14,15,19)]
+input_nutrients = input_nutrients %>% group_by(Week) %>% summarise_all(mean)
+#add input nutrients to pivot_table based on week
+pivot_table = as.data.frame(pivot_table)
+input_nutrients = as.data.frame(input_nutrients)
+#change Week to week
+input_nutrients = input_nutrients %>% rename(week = Week)
+pivot_table = merge(pivot_table, input_nutrients, by = "week")
+#make week rownames in pivot_table
+rownames(pivot_table) = pivot_table[,1]
 
-#move rownames to first column
-inf = cbind(rownames(inf), inf)
-#call column 1 date
-colnames(inf)[1] = "date"
-#remove first 3 characters from date
-inf$date = substr(inf$date, 5, nchar(inf$date))
-#make date rownames
-rownames(inf) = inf$date
-inf$date = as.Date(inf$date, format = "%m/%d/%Y")
-inf = inf[order(inf$date),]
-inf = inf[,-1]
+metadata = metadata[,-c(1,2,3,4,5,6,8,10,12,13,15,14)]
+#groupby week and average metadata
+metadata = metadata %>% group_by(Week) %>% summarise_all(mean)
+#make a matrix
+metadata = as.matrix(metadata)
+#make week rownames in metadata
+rownames(metadata) = metadata[,1]
 
-#keep only matching rownames from inf and as
-#remove last row from as
-as = as[-nrow(as),]
-#remove row 4
-as = as[c(-4,-11),]
+#keep only the rows in pivot_table that are in metadata based on week column
+metadata = as.data.frame(metadata)
+pivot_table = as.data.frame(pivot_table)
+metadata = metadata[rownames(pivot_table),]
 
-#average every 2 rows in inf
-as <- as %>%
-  group_by(group = (row_number() - 1) %/% 2) %>%
-  summarise(across(where(is.numeric), mean))
-#remove group column
-as = as[,-1]
-#keep columns with title "Zotu2", "Zotu3", "Zotu10", "Zotu5", "Zotu289"
-as = subset(as,select = c("Zotu2", "Zotu3", "Zotu10", "Zotu5", "Zotu289"))
-
+#remove na from metadata
+metadata = metadata[complete.cases(metadata),]
+#delete column 1
+metadata = metadata[,-1]
+pivot_table = pivot_table[,-1]
+#as matrix
+metadata = as.matrix(metadata)
+pivot_table = as.matrix(pivot_table)
 #Trying PLS only using relative abundances of the microbial community
 #find size of otus- with samples as width and zOTUs as length
-samples = dim(inf)[1]
-zotus = dim(inf)[2]
-
-#turn as and inf dataframes into numeric matrices
-as <- data.frame(lapply(as, function(x) as.numeric(as.character(x))))
+samples = dim(pivot_table)[1]
+zotus = dim(pivot_table)[2]
 
 #subset otus into two sets- training and testing with trained_samples number used for training
-train_otus = as.matrix(inf[1:round(samples*.8, 0),])
-test_otus = as.matrix(inf[(round(samples*.8, 0)+1):samples,])
+train_otus = as.matrix(pivot_table[1:round(samples*.8, 0),])
+test_otus = as.matrix(pivot_table[(round(samples*.8, 0)+1):samples,])
 
 ## Impact of Influent Microbial community on core AS community
 #keep the rownames in metadata that are the same in train_otus
-train_metadata = as.matrix(as[1:round(samples*.8, 0),])
-test_metadata = as.matrix(as[(round(samples*.8, 0)+1):samples,])
+train_metadata = as.matrix(metadata[1:round(samples*.8, 0),])
+test_metadata = as.matrix(metadata[(round(samples*.8, 0)+1):samples,])
 
 train_metadata = as.matrix(apply(train_metadata, 2, as.numeric))
 test_metadata = as.matrix(apply(test_metadata, 2, as.numeric))
@@ -117,11 +109,10 @@ test_otus = as.matrix(apply(test_otus, 2, as.numeric))
 
 ## Plotting PLS Model
 # ncomp is number of components
-pls_model_tss <- pls(train_otus, train_metadata, 10, x.test = test_otus, y.test = test_metadata)
+pls_model_tss <- pls(train_otus, train_metadata[,3], 10, x.test = test_otus, y.test = test_metadata[,2])
 summary(pls_model_tss)
 #plot the PLS model
 tss_model = plot(pls_model_tss)
 plotPredictions(pls_model_tss$res$cal, ncomp = 1, show.stat = TRUE) 
 tss_vip = plotVIPScores(pls_model_tss)
-
 
